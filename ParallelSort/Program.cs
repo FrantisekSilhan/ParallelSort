@@ -1,120 +1,111 @@
-﻿using System.Diagnostics;
+﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Running;
 
-int[] generateArray(int size) {
-    int[] array = new int[size];
-    for (int i = 0; i < size; i++) {
-        array[i] = i;
+public class SortingBenchmark {
+    private int[] array;
+    private const int ArraySize = 100000;
+    private const int Threads = 12;
+
+    [GlobalSetup]
+    public void Setup() {
+        array = shuffleArray(generateArray(ArraySize));
     }
-    return array;
-}
 
-int[] shuffleArray(int[] array) {
-    Random random = new Random();
-    for (int i = 0; i < array.Length; i++) {
-        int j = random.Next(i, array.Length);
-        int temp = array[i];
-        array[i] = array[j];
-        array[j] = temp;
-    }
-    return array;
-}
-
-void printArray(int[] array) {
-    for (int i = 0; i < array.Length; i++) {
-        Console.Write(array[i] + " ");
-    }
-    Console.WriteLine();
-}
-
-int[] sortArraySync(int[] array) {
-    for (int i = 1; i < array.Length; i++) {
-        int key = array[i];
-        int j = i - 1;
-        while (j >= 0 && array[j] > key) {
-            array[j + 1] = array[j];
-            j = j - 1;
+    private int[] generateArray(int size) {
+        int[] array = new int[size];
+        for (int i = 0; i < size; i++) {
+            array[i] = i;
         }
-        array[j + 1] = key;
+        return array;
     }
 
-    return array;
-}
+    private int[] shuffleArray(int[] array) {
+        Random random = new Random();
+        for (int i = 0; i < array.Length; i++) {
+            int j = random.Next(i, array.Length);
+            int temp = array[i];
+            array[i] = array[j];
+            array[j] = temp;
+        }
+        return array;
+    }
 
-int[] sortArrayAsync(int[] array, int threads) {
-    int[] sortedArray = new int[array.Length];
-    int chunkSize = array.Length / threads;
-    Task[] tasks = new Task[threads];
-    int[][] sortedChunks = new int[threads][];
+    private int[] sortArraySync(int[] array) {
+        int[] sortedArray = (int[])array.Clone();
+        for (int i = 1; i < sortedArray.Length; i++) {
+            int key = sortedArray[i];
+            int j = i - 1;
+            while (j >= 0 && sortedArray[j] > key) {
+                sortedArray[j + 1] = sortedArray[j];
+                j = j - 1;
+            }
+            sortedArray[j + 1] = key;
+        }
 
-    for (int i = 0; i < threads; i++) {
-        int start = i * chunkSize;
-        int end = i == threads - 1 ? array.Length : (i + 1) * chunkSize;
-        int threadIndex = i;
+        return sortedArray;
+    }
 
-        tasks[i] = Task.Run(() => {
-            int[] chunk = new int[end - start];
-            Array.Copy(array, start, chunk, 0, end - start);
-            for (int j = 1; j < chunk.Length; j++) {
-                int key = chunk[j];
-                int k = j - 1;
-                while (k >= 0 && chunk[k] > key) {
-                    chunk[k + 1] = chunk[k];
-                    k = k - 1;
+    private int[] sortArrayAsync(int[] array, int threads) {
+        int[] sortedArray = new int[array.Length];
+        int chunkSize = array.Length / threads;
+        Task[] tasks = new Task[threads];
+        int[][] sortedChunks = new int[threads][];
+
+        for (int i = 0; i < threads; i++) {
+            int start = i * chunkSize;
+            int end = i == threads - 1 ? array.Length : (i + 1) * chunkSize;
+            int threadIndex = i;
+
+            tasks[i] = Task.Run(() => {
+                int[] chunk = new int[end - start];
+                Array.Copy(array, start, chunk, 0, end - start);
+                for (int j = 1; j < chunk.Length; j++) {
+                    int key = chunk[j];
+                    int k = j - 1;
+                    while (k >= 0 && chunk[k] > key) {
+                        chunk[k + 1] = chunk[k];
+                        k = k - 1;
+                    }
+                    chunk[k + 1] = key;
                 }
-                chunk[k + 1] = key;
-            }
-            sortedChunks[threadIndex] = chunk;
-        });
-    }
-
-    Task.WaitAll(tasks);
-
-    int[] chunkIndices = new int[threads];
-    for (int i = 0; i < array.Length; i++) {
-        int minChunk = -1;
-        int minValue = int.MaxValue;
-
-        for (int j = 0; j < threads; j++) {
-            if (chunkIndices[j] < sortedChunks[j].Length && sortedChunks[j][chunkIndices[j]] < minValue) {
-                minValue = sortedChunks[j][chunkIndices[j]];
-                minChunk = j;
-            }
+                sortedChunks[threadIndex] = chunk;
+            });
         }
 
-        sortedArray[i] = minValue;
-        chunkIndices[minChunk]++;
-    }
+        Task.WaitAll(tasks);
 
-    return sortedArray;
-}
+        int[] chunkIndices = new int[threads];
+        for (int i = 0; i < array.Length; i++) {
+            int minChunk = -1;
+            int minValue = int.MaxValue;
 
+            for (int j = 0; j < threads; j++) {
+                if (chunkIndices[j] < sortedChunks[j].Length && sortedChunks[j][chunkIndices[j]] < minValue) {
+                    minValue = sortedChunks[j][chunkIndices[j]];
+                    minChunk = j;
+                }
+            }
 
-bool isSorted(int[] array) {
-    for (int i = 1; i < array.Length; i++) {
-        if (array[i] < array[i - 1]) {
-            return false;
+            sortedArray[i] = minValue;
+            chunkIndices[minChunk]++;
         }
+
+        return sortedArray;
     }
-    return true;
+
+    [Benchmark]
+    public int[] BenchmarkSortSync() {
+        return sortArraySync(array);
+    }
+
+    [Benchmark]
+    public int[] BenchmarkSortAsync() {
+        return sortArrayAsync(array, Threads);
+    }
 }
 
-Console.WriteLine("Insertion Sort!!! UwU");
-
-int[] list = shuffleArray(generateArray(100000));
-
-Stopwatch stopwatch = new Stopwatch();
-stopwatch.Start();
-
-int[] sortedListAsync = sortArrayAsync(list, 12);
-
-stopwatch.Stop();
-
-Console.WriteLine("Async: " + stopwatch.ElapsedMilliseconds + "ms; Sorted: " + isSorted(sortedListAsync) + "; length: " + sortedListAsync.Length + "/" + list.Length);
-
-stopwatch.Restart();
-
-int[] sortedListSync = sortArraySync(list);
-
-stopwatch.Stop();
-
-Console.WriteLine("Sync: " + stopwatch.ElapsedMilliseconds + "ms; Sorted: " + isSorted(sortedListSync) + "; length: " + sortedListSync.Length + "/" + list.Length);
+public class Program {
+    public static void Main(string[] args) {
+        var summary = BenchmarkRunner.Run<SortingBenchmark>();
+    }
+}
